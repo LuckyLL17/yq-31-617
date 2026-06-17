@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from data_validator import (
     _flatten_dict,
@@ -194,6 +195,11 @@ class TestValidateFormat(unittest.TestCase):
     def test_invalid_regex_pattern_returns_true(self):
         result = _validate_regex("test", {"pattern": "["})
         self.assertTrue(result)
+
+    def test_format_invalid_pattern_returns_true(self):
+        with mock.patch.dict("data_validator.FORMAT_PATTERNS", {FORMAT_EMAIL: "[invalid"}):
+            result = _validate_format("test@example.com", {"format": FORMAT_EMAIL})
+            self.assertTrue(result)
 
 
 class TestValidateRange(unittest.TestCase):

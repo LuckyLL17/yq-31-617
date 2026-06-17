@@ -165,6 +165,13 @@ class TestPrepareRows(unittest.TestCase):
         self.assertTrue(mock_progress.set_field.called)
         self.assertTrue(mock_progress.set_row_preview.called)
 
+    def test_progress_updates_for_non_dict_items(self):
+        mock_progress = mock.MagicMock()
+        data = [{"id": 1}, "bad", {"id": 2}, None]
+        headers = [{"key": "id", "label": "ID"}]
+        _prepare_rows(data, headers, progress=mock_progress, progress_step=1)
+        self.assertEqual(mock_progress.update.call_count, 4)
+
 
 class TestExportToCSV(unittest.TestCase):
     def setUp(self):
@@ -623,7 +630,7 @@ class TestExportToPDF(unittest.TestCase):
         path = os.path.join(self.temp_dir, "custom_title.pdf")
         config = {
             "pdf_output_path": path,
-            "pdf_title": "自定义标题",
+            "pdf_config": {"title": "自定义标题"},
         }
         result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
         if result is not None:
@@ -633,7 +640,7 @@ class TestExportToPDF(unittest.TestCase):
         path = os.path.join(self.temp_dir, "with_index.pdf")
         config = {
             "pdf_output_path": path,
-            "pdf_include_index": True,
+            "pdf_config": {"include_index": True},
         }
         result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
         if result is not None:
@@ -643,8 +650,7 @@ class TestExportToPDF(unittest.TestCase):
         path = os.path.join(self.temp_dir, "landscape.pdf")
         config = {
             "pdf_output_path": path,
-            "pdf_page_size": "A4",
-            "pdf_orientation": "landscape",
+            "pdf_config": {"page_size": "A4", "orientation": "landscape"},
         }
         result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
         if result is not None:
@@ -654,7 +660,7 @@ class TestExportToPDF(unittest.TestCase):
         path = os.path.join(self.temp_dir, "letter.pdf")
         config = {
             "pdf_output_path": path,
-            "pdf_page_size": "letter",
+            "pdf_config": {"page_size": "letter"},
         }
         result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
         if result is not None:
@@ -668,6 +674,57 @@ class TestExportToPDF(unittest.TestCase):
         result = export_to_pdf(long_data, long_headers, config)
         if result is not None:
             self.assertTrue(os.path.exists(result))
+
+    def test_pdf_no_registered_font_uses_default(self):
+        path = os.path.join(self.temp_dir, "no_font.pdf")
+        config = {"pdf_output_path": path}
+        real_exists = os.path.exists
+
+        def mock_exists(p):
+            p_str = str(p)
+            if "Fonts" in p_str or "fonts" in p_str:
+                return False
+            return real_exists(p)
+
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
+            if result is not None:
+                self.assertTrue(real_exists(result))
+
+    def test_pdf_ttfont_exception_falls_back(self):
+        path = os.path.join(self.temp_dir, "ttf_exc.pdf")
+        config = {"pdf_output_path": path}
+        real_exists = os.path.exists
+
+        def mock_exists(p):
+            p_str = str(p)
+            if "Fonts" in p_str or "fonts" in p_str:
+                return True
+            return real_exists(p)
+
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            with mock.patch("reportlab.pdfbase.pdfmetrics.registerFont", side_effect=Exception("font error")):
+                result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
+                if result is not None:
+                    self.assertTrue(real_exists(result))
+
+    def test_pdf_outer_font_exception_handled(self):
+        path = os.path.join(self.temp_dir, "outer_exc.pdf")
+        config = {"pdf_output_path": path}
+        real_exists = os.path.exists
+        call_count = [0]
+
+        def mock_exists(p):
+            p_str = str(p)
+            if "Fonts" in p_str or "fonts" in p_str or "PingFang" in p_str or "STHeiti" in p_str or "Hiragino" in p_str or "msyh" in p_str or "simhei" in p_str or "wqy" in p_str or "NotoSansCJK" in p_str:
+                call_count[0] += 1
+                raise Exception("outer exception")
+            return real_exists(p)
+
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config)
+            if result is not None:
+                self.assertTrue(real_exists(path))
 
 
 class TestExportPDFViaHTML(unittest.TestCase):
@@ -683,6 +740,28 @@ class TestExportPDFViaHTML(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"weasyprint": None}):
             result = _export_pdf_via_html(SAMPLE_DATA, SAMPLE_HEADERS, config, path, "Test", False)
             self.assertIsNone(result)
+
+    def test_with_weasyprint_mock(self):
+        path = os.path.join(self.temp_dir, "weasy.pdf")
+        config = {"pdf_output_path": path, "pdf_config": {"title": "Test"}}
+        mock_html = mock.MagicMock()
+        mock_weasyprint = mock.MagicMock()
+        mock_weasyprint.HTML.return_value = mock_html
+        with mock.patch.dict(sys.modules, {"weasyprint": mock_weasyprint}):
+            result = _export_pdf_via_html(SAMPLE_DATA, SAMPLE_HEADERS, config, path, "Test", False)
+            self.assertEqual(result, path)
+            self.assertTrue(mock_html.write_pdf.called)
+
+    def test_os_remove_exception_is_swallowed(self):
+        path = os.path.join(self.temp_dir, "os_remove.pdf")
+        config = {"pdf_output_path": path, "pdf_config": {"title": "Test"}}
+        mock_html = mock.MagicMock()
+        mock_weasyprint = mock.MagicMock()
+        mock_weasyprint.HTML.return_value = mock_html
+        with mock.patch.dict(sys.modules, {"weasyprint": mock_weasyprint}):
+            with mock.patch("os.remove", side_effect=OSError("cannot remove")):
+                result = _export_pdf_via_html(SAMPLE_DATA, SAMPLE_HEADERS, config, path, "Test", False)
+                self.assertEqual(result, path)
 
 
 class TestExportData(unittest.TestCase):
@@ -926,6 +1005,171 @@ class TestMultiFormatExporterExports(unittest.TestCase):
         rows = self.exporter._prepare_rows(SAMPLE_DATA, SAMPLE_HEADERS)
         self.assertEqual(len(rows), 2)
 
+    def test_export_tsv_via_export_method(self):
+        path = self._set_output("tsv", "via_export.tsv")
+        result = self.exporter.export(SAMPLE_DATA, SAMPLE_HEADERS, fmt="tsv")
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_html_via_export_method(self):
+        path = self._set_output("html", "via_export.html")
+        result = self.exporter.export(SAMPLE_DATA, SAMPLE_HEADERS, fmt="html")
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_markdown_via_export_method(self):
+        path = self._set_output("markdown", "via_export.md")
+        result = self.exporter.export(SAMPLE_DATA, SAMPLE_HEADERS, fmt="markdown")
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_json_via_export_method(self):
+        path = self._set_output("json", "via_export.json")
+        result = self.exporter.export(SAMPLE_DATA, SAMPLE_HEADERS, fmt="json")
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_csv_creates_nested_dir(self):
+        path = os.path.join(self.temp_dir, "nested", "sub", "test.csv")
+        self.exporter.config.set_output_path(path, "csv")
+        result = self.exporter.export_csv(SAMPLE_DATA, SAMPLE_HEADERS)
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_tsv_creates_nested_dir(self):
+        path = os.path.join(self.temp_dir, "nested", "sub", "test.tsv")
+        self.exporter.config.set_output_path(path, "tsv")
+        result = self.exporter.export_tsv(SAMPLE_DATA, SAMPLE_HEADERS)
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_json_creates_nested_dir(self):
+        path = os.path.join(self.temp_dir, "nested", "sub", "test.json")
+        self.exporter.config.set_output_path(path, "json")
+        result = self.exporter.export_json(SAMPLE_DATA, SAMPLE_HEADERS)
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_markdown_creates_nested_dir(self):
+        path = os.path.join(self.temp_dir, "nested", "sub", "test.md")
+        self.exporter.config.set_output_path(path, "markdown")
+        result = self.exporter.export_markdown(SAMPLE_DATA, SAMPLE_HEADERS)
+        self.assertTrue(os.path.exists(result))
+
+    def test_export_html_creates_nested_dir(self):
+        path = os.path.join(self.temp_dir, "nested", "sub", "test.html")
+        self.exporter.config.set_output_path(path, "html")
+        result = self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        self.assertTrue(os.path.exists(result))
+
+    def test_prepare_rows_with_non_dict_items(self):
+        data = [{"id": 1}, "not a dict", {"id": 2}]
+        rows = self.exporter._prepare_rows(data, [{"key": "id", "label": "ID"}])
+        self.assertEqual(len(rows), 2)
+
+    def test_export_json_with_non_dict_items(self):
+        data = [{"name": "Alice", "age": 30}, "bad_item", {"name": "Bob", "age": 25}]
+        path = self._set_output("json", "nondict.json")
+        result = self.exporter.export_json(data, SAMPLE_HEADERS)
+        self.assertTrue(os.path.exists(result))
+        with open(result, "r", encoding="utf-8") as f:
+            exported = json.load(f)
+        self.assertEqual(len(exported), 2)
+
+    def test_export_json_with_computed_cache(self):
+        data = [{"id": 1, "name": "Alice"}]
+        headers = [{"key": "id", "label": "ID"}, {"key": "extra", "label": "额外"}]
+        cache = {id(data[0]): {"extra": "computed_value"}}
+        path = self._set_output("json", "computed.json")
+        self.exporter.export_json(data, headers, computed_cache=cache)
+        with open(path, "r", encoding="utf-8") as f:
+            exported = json.load(f)
+        self.assertEqual(exported[0]["extra"], "computed_value")
+
+    def test_export_json_labels_with_computed_cache(self):
+        data = [{"id": 1, "name": "Alice"}]
+        headers = [{"key": "id", "label": "ID号"}, {"key": "calc", "label": "计算值"}]
+        cache = {id(data[0]): {"calc": 999}}
+        self.exporter.config["json_config"] = {"include_labels": True}
+        path = self._set_output("json", "labels_computed.json")
+        self.exporter.export_json(data, headers, computed_cache=cache)
+        with open(path, "r", encoding="utf-8") as f:
+            exported = json.load(f)
+        self.assertEqual(exported[0]["计算值"], 999)
+
+    def test_export_json_zero_indent(self):
+        self.exporter.config["json_config"] = {"indent": 0}
+        path = self._set_output("json", "noindent.json")
+        self.exporter.export_json(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertNotIn("\n", content.strip())
+
+    def test_export_markdown_with_index(self):
+        self.exporter.config["markdown_config"] = {"include_index": True}
+        path = self._set_output("markdown", "with_index.md")
+        self.exporter.export_markdown(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("| # |", content)
+
+    def test_export_markdown_no_title(self):
+        self.exporter.config["markdown_config"] = {"title": ""}
+        path = self._set_output("markdown", "no_title.md")
+        self.exporter.export_markdown(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertNotIn("# ", content[:10])
+
+    def test_export_markdown_long_cell_truncated(self):
+        long_name = "a" * 100
+        data = [{"name": long_name, "age": 30}]
+        headers = [{"key": "name", "label": "姓名"}, {"key": "age", "label": "年龄"}]
+        path = self._set_output("markdown", "long_cell.md")
+        self.exporter.export_markdown(data, headers)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("...", content)
+
+    def test_export_html_compact_style(self):
+        self.exporter.config["html_config"] = {"style": "compact"}
+        path = self._set_output("html", "compact.html")
+        self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("monospace", content)
+
+    def test_export_html_none_style(self):
+        self.exporter.config["html_config"] = {"style": "none"}
+        path = self._set_output("html", "none_style.html")
+        self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("<style></style>", content)
+
+    def test_export_html_unknown_style_defaults(self):
+        self.exporter.config["html_config"] = {"style": "unknown_style"}
+        path = self._set_output("html", "unknown_style.html")
+        self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("4472C4", content)
+
+    def test_export_html_with_custom_css(self):
+        self.exporter.config["html_config"] = {"custom_css": "body { color: red; }"}
+        path = self._set_output("html", "custom_css.html")
+        self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("color: red", content)
+
+    def test_export_html_with_index(self):
+        self.exporter.config["html_config"] = {"include_index": True}
+        path = self._set_output("html", "with_index.html")
+        self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("<th>#</th>", content)
+
+    def test_export_html_no_pretty_print(self):
+        self.exporter.config["html_config"] = {"pretty_print": False}
+        path = self._set_output("html", "compact_out.html")
+        self.exporter.export_html(SAMPLE_DATA, SAMPLE_HEADERS)
+        # 不抛异常即可
+
 
 class TestMultiFormatExporterPDF(unittest.TestCase):
     def setUp(self):
@@ -953,8 +1197,7 @@ class TestMultiFormatExporterPDF(unittest.TestCase):
     def test_export_pdf_with_title_and_index(self):
         path = os.path.join(self.temp_dir, "title_idx.pdf")
         self.exporter.config.set_output_path(path, "pdf")
-        self.exporter.config.pdf_title = "测试报告"
-        self.exporter.config.pdf_include_index = True
+        self.exporter.config.set_format_config("pdf", {"title": "测试报告", "include_index": True})
         result = self.exporter.export_pdf(SAMPLE_DATA, SAMPLE_HEADERS)
         if result is not None:
             self.assertTrue(os.path.exists(result))
@@ -962,8 +1205,7 @@ class TestMultiFormatExporterPDF(unittest.TestCase):
     def test_export_pdf_landscape(self):
         path = os.path.join(self.temp_dir, "landscape.pdf")
         self.exporter.config.set_output_path(path, "pdf")
-        self.exporter.config.pdf_page_size = "A4"
-        self.exporter.config.pdf_orientation = "landscape"
+        self.exporter.config.set_format_config("pdf", {"page_size": "A4", "orientation": "landscape"})
         result = self.exporter.export_pdf(SAMPLE_DATA, SAMPLE_HEADERS)
         if result is not None:
             self.assertTrue(os.path.exists(result))
@@ -971,7 +1213,7 @@ class TestMultiFormatExporterPDF(unittest.TestCase):
     def test_export_pdf_letter_size(self):
         path = os.path.join(self.temp_dir, "letter.pdf")
         self.exporter.config.set_output_path(path, "pdf")
-        self.exporter.config.pdf_page_size = "letter"
+        self.exporter.config.set_format_config("pdf", {"page_size": "letter"})
         result = self.exporter.export_pdf(SAMPLE_DATA, SAMPLE_HEADERS)
         if result is not None:
             self.assertTrue(os.path.exists(result))
@@ -993,6 +1235,99 @@ class TestMultiFormatExporterPDF(unittest.TestCase):
         result = self.exporter.export_pdf(SAMPLE_DATA, headers_with_extra, computed_cache=cache)
         if result is not None:
             self.assertTrue(os.path.exists(result))
+
+    def test_export_pdf_via_html_with_weasyprint_mock(self):
+        path = os.path.join(self.temp_dir, "weasyprint.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        mock_html = mock.MagicMock()
+        mock_weasyprint = mock.MagicMock()
+        mock_weasyprint.HTML.return_value = mock_html
+        with mock.patch.dict(sys.modules, {"weasyprint": mock_weasyprint}):
+            result = self.exporter._export_pdf_via_html(SAMPLE_DATA, SAMPLE_HEADERS, path, "Test", False)
+            if result is not None:
+                self.assertTrue(mock_html.write_pdf.called)
+
+    def test_export_pdf_via_export_method(self):
+        path = os.path.join(self.temp_dir, "via_export.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        removed_rl = _remove_modules("reportlab")
+        removed_wp = _remove_modules("weasyprint")
+        try:
+            with mock.patch.dict(sys.modules, {"reportlab": None, "weasyprint": None}):
+                result = self.exporter.export(SAMPLE_DATA, SAMPLE_HEADERS, fmt="pdf")
+                self.assertIsNone(result)
+        finally:
+            _restore_modules(removed_rl)
+            _restore_modules(removed_wp)
+
+    def test_export_pdf_no_font_falls_back_default(self):
+        path = os.path.join(self.temp_dir, "no_font_cls.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        real_exists = os.path.exists
+
+        def mock_exists(p):
+            p_str = str(p)
+            if "Fonts" in p_str or "fonts" in p_str:
+                return False
+            return real_exists(p)
+
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            result = self.exporter.export_pdf(SAMPLE_DATA, SAMPLE_HEADERS)
+            if result is not None:
+                self.assertTrue(real_exists(result))
+
+    def test_export_pdf_ttfont_exception_falls_back(self):
+        path = os.path.join(self.temp_dir, "ttf_exc_cls.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        real_exists = os.path.exists
+
+        def mock_exists(p):
+            p_str = str(p)
+            if "Fonts" in p_str or "fonts" in p_str:
+                return True
+            return real_exists(p)
+
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            with mock.patch("reportlab.pdfbase.pdfmetrics.registerFont", side_effect=Exception("font error")):
+                result = self.exporter.export_pdf(SAMPLE_DATA, SAMPLE_HEADERS)
+                if result is not None:
+                    self.assertTrue(real_exists(result))
+
+    def test_export_pdf_long_cell_truncated(self):
+        path = os.path.join(self.temp_dir, "long_cls.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        long_data = [{"name": "a" * 200, "age": 30}]
+        long_headers = [{"key": "name", "label": "姓名"}, {"key": "age", "label": "年龄"}]
+        result = self.exporter.export_pdf(long_data, long_headers)
+        if result is not None:
+            self.assertTrue(os.path.exists(result))
+
+    def test_export_pdf_via_html_os_remove_exception(self):
+        path = os.path.join(self.temp_dir, "os_remove_cls.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        mock_html = mock.MagicMock()
+        mock_weasyprint = mock.MagicMock()
+        mock_weasyprint.HTML.return_value = mock_html
+        with mock.patch.dict(sys.modules, {"weasyprint": mock_weasyprint}):
+            with mock.patch("os.remove", side_effect=OSError("cannot remove")):
+                result = self.exporter._export_pdf_via_html(SAMPLE_DATA, SAMPLE_HEADERS, path, "Test", False)
+                self.assertEqual(result, path)
+
+    def test_export_pdf_outer_font_exception(self):
+        path = os.path.join(self.temp_dir, "outer_exc_cls.pdf")
+        self.exporter.config.set_output_path(path, "pdf")
+        real_exists = os.path.exists
+
+        def mock_exists(p):
+            p_str = str(p)
+            if "Fonts" in p_str or "fonts" in p_str or "PingFang" in p_str or "STHeiti" in p_str or "Hiragino" in p_str or "msyh" in p_str or "simhei" in p_str or "wqy" in p_str or "NotoSansCJK" in p_str:
+                raise Exception("outer exception")
+            return real_exists(p)
+
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            result = self.exporter.export_pdf(SAMPLE_DATA, SAMPLE_HEADERS)
+            if result is not None:
+                self.assertTrue(real_exists(path))
 
 
 class TestMultiFormatExporterFromLoader(unittest.TestCase):

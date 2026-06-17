@@ -96,6 +96,12 @@ class TestParseDate(unittest.TestCase):
     def test_invalid_numeric(self):
         self.assertIsNone(_parse_date(10**10))
 
+    def test_str_raises_exception(self):
+        class BadStr:
+            def __str__(self):
+                raise RuntimeError("bad str")
+        self.assertIsNone(_parse_date(BadStr()))
+
 
 class TestDateDiff(unittest.TestCase):
     def test_both_none(self):
@@ -146,6 +152,10 @@ class TestDateDiff(unittest.TestCase):
     def test_invalid_dates(self):
         self.assertIsNone(_date_diff("invalid", "2024-01-01"))
 
+    def test_unknown_unit_returns_days(self):
+        result = _date_diff("2024-01-01", "2024-01-10", unit="unknown")
+        self.assertEqual(result, 9)
+
 
 class TestDateAdd(unittest.TestCase):
     def test_none_base(self):
@@ -177,6 +187,10 @@ class TestDateAdd(unittest.TestCase):
     def test_default_unit(self):
         result = _date_add("2024-01-01", 1)
         self.assertEqual(result, date(2024, 1, 2))
+
+    def test_unknown_unit_returns_same_date(self):
+        result = _date_add("2024-01-01", 5, unit="unknown")
+        self.assertEqual(result, date(2024, 1, 1))
 
 
 class TestToNumber(unittest.TestCase):
@@ -251,6 +265,13 @@ class TestEvaluateArithmetic(unittest.TestCase):
         field_values = {"a": 16}
         result = evaluate_arithmetic(formula, field_values)
         self.assertEqual(result, 4.0)
+
+    def test_float_result_not_whole_number(self):
+        formula = "a / b"
+        field_values = {"a": 7, "b": 2}
+        result = evaluate_arithmetic(formula, field_values)
+        self.assertEqual(result, 3.5)
+        self.assertIsInstance(result, float)
 
 
 class TestEvaluateDateDiff(unittest.TestCase):
@@ -415,6 +436,24 @@ class TestEvaluateConditional(unittest.TestCase):
         field_values = {"f": "x"}
         self.assertEqual(evaluate_conditional(config, field_values), "false_result")
 
+    def test_compare_numeric_invalid_operator(self):
+        config = {
+            "condition": {"type": "compare", "field": "num", "operator": "invalid_op", "value": 10},
+            "true_value": "yes",
+            "false_value": "no",
+        }
+        field_values = {"num": 5}
+        self.assertEqual(evaluate_conditional(config, field_values), "no")
+
+    def test_compare_string_not_equal(self):
+        config = {
+            "condition": {"type": "compare", "field": "status", "operator": "!=", "value": "active"},
+            "true_value": "changed",
+            "false_value": "same",
+        }
+        field_values = {"status": "inactive"}
+        self.assertEqual(evaluate_conditional(config, field_values), "changed")
+
     def test_is_null_true(self):
         config = {
             "condition": {"type": "is_null", "field": "f"},
@@ -536,6 +575,12 @@ class TestEvaluateRound(unittest.TestCase):
         field_values = {"num": None}
         result = evaluate_round(config, field_values)
         self.assertIsNone(result)
+
+    def test_unknown_method_defaults_to_round(self):
+        config = {"field": "num", "method": "unknown", "precision": 1}
+        field_values = {"num": 3.14}
+        result = evaluate_round(config, field_values)
+        self.assertEqual(result, 3.1)
 
 
 class TestEvaluateComputedColumn(unittest.TestCase):

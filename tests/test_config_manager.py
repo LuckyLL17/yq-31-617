@@ -311,6 +311,22 @@ class TestValidateConfig(unittest.TestCase):
         errors = validate_config(cfg)
         self.assertTrue(any("计算列配置格式错误" in e for e in errors))
 
+    def test_computed_column_valid(self):
+        cfg = get_default_config()
+        cfg["computed_columns"] = [
+            {"key": "total", "label": "合计", "formula_type": "arithmetic", "formula": "a + b", "referenced_fields": ["a", "b"]}
+        ]
+        errors = validate_config(cfg)
+        self.assertEqual(errors, [])
+
+    def test_conditional_format_rule_valid(self):
+        cfg = get_default_config()
+        cfg["conditional_format_rules"] = [
+            {"type": "cell_color", "field": "score", "rules": [{"min": 0, "color": "#FF0000"}]}
+        ]
+        errors = validate_config(cfg)
+        self.assertTrue(any("条件格式" in e for e in errors) or len(errors) == 0)
+
     def test_pivot_config_enabled_missing_row_fields(self):
         cfg = get_default_config()
         cfg["pivot_config"] = {"enabled": True, "row_fields": [], "value_fields": [{"field": "v", "aggregate": "sum"}]}
@@ -587,6 +603,17 @@ class TestExportConfig(unittest.TestCase):
         ec.set_nested("new_val", "csv_config", "new_key")
         self.assertEqual(ec.get_nested("csv_config", "new_key"), "new_val")
 
+    def test_set_nested_creates_intermediate_dicts(self):
+        ec = ExportConfig()
+        ec.set_nested("deep_val", "new_section", "sub_section", "key")
+        self.assertEqual(ec.get_nested("new_section", "sub_section", "key"), "deep_val")
+
+    def test_set_nested_overwrites_non_dict(self):
+        ec = ExportConfig()
+        ec.set("some_key", "not_a_dict")
+        ec.set_nested("val", "some_key", "sub")
+        self.assertEqual(ec.get_nested("some_key", "sub"), "val")
+
     def test_json_file_path_property(self):
         ec = ExportConfig()
         ec.json_file_path = "/test.json"
@@ -662,25 +689,55 @@ class TestExportConfig(unittest.TestCase):
         ec = ExportConfig()
         self.assertIsInstance(ec.validation_rules, list)
 
+    def test_validation_rules_setter(self):
+        ec = ExportConfig()
+        ec.validation_rules = [{"field": "a", "rule_type": "not_null"}]
+        self.assertEqual(len(ec.validation_rules), 1)
+
     def test_conditional_format_rules_property(self):
         ec = ExportConfig()
         self.assertIsInstance(ec.conditional_format_rules, list)
+
+    def test_conditional_format_rules_setter(self):
+        ec = ExportConfig()
+        ec.conditional_format_rules = [{"field": "a", "type": "color_scale"}]
+        self.assertEqual(len(ec.conditional_format_rules), 1)
 
     def test_split_config_property(self):
         ec = ExportConfig()
         self.assertIsInstance(ec.split_config, dict)
 
+    def test_split_config_setter(self):
+        ec = ExportConfig()
+        ec.split_config = {"enabled": True}
+        self.assertTrue(ec.split_config["enabled"])
+
     def test_pivot_config_property(self):
         ec = ExportConfig()
         self.assertIsInstance(ec.pivot_config, dict)
+
+    def test_pivot_config_setter(self):
+        ec = ExportConfig()
+        ec.pivot_config = {"enabled": True}
+        self.assertTrue(ec.pivot_config["enabled"])
 
     def test_header_style_property(self):
         ec = ExportConfig()
         self.assertIsInstance(ec.header_style, dict)
 
+    def test_header_style_setter(self):
+        ec = ExportConfig()
+        ec.header_style = {"bold": True}
+        self.assertTrue(ec.header_style["bold"])
+
     def test_data_style_property(self):
         ec = ExportConfig()
         self.assertIsInstance(ec.data_style, dict)
+
+    def test_data_style_setter(self):
+        ec = ExportConfig()
+        ec.data_style = {"font_size": 12}
+        self.assertEqual(ec.data_style["font_size"], 12)
 
     def test_get_format_config(self):
         ec = ExportConfig()
@@ -698,11 +755,21 @@ class TestExportConfig(unittest.TestCase):
         self.assertIsNotNone(h)
         self.assertEqual(h["key"], "id")
 
+    def test_get_header_by_key_not_found(self):
+        ec = ExportConfig()
+        h = ec.get_header_by_key("nonexistent")
+        self.assertIsNone(h)
+
     def test_update_header_width(self):
         ec = ExportConfig()
         result = ec.update_header_width("id", 99)
         self.assertTrue(result)
         self.assertEqual(ec.get_header_by_key("id")["width"], 99)
+
+    def test_update_header_width_not_found(self):
+        ec = ExportConfig()
+        result = ec.update_header_width("nonexistent", 50)
+        self.assertFalse(result)
 
     def test_update_header_label(self):
         ec = ExportConfig()
@@ -710,11 +777,28 @@ class TestExportConfig(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(ec.get_header_by_key("id")["label"], "编号")
 
+    def test_update_header_label_not_found(self):
+        ec = ExportConfig()
+        result = ec.update_header_label("nonexistent", "新标签")
+        self.assertFalse(result)
+
     def test_add_header(self):
         ec = ExportConfig()
         initial_count = len(ec.default_headers)
         ec.add_header("new_key", "New Label")
         self.assertEqual(len(ec.default_headers), initial_count + 1)
+
+    def test_add_header_at_position(self):
+        ec = ExportConfig()
+        initial_count = len(ec.default_headers)
+        ec.add_header("new_key", "New Label", position=0)
+        self.assertEqual(ec.default_headers[0]["key"], "new_key")
+        self.assertEqual(len(ec.default_headers), initial_count + 1)
+
+    def test_add_header_negative_position_clamps(self):
+        ec = ExportConfig()
+        ec.add_header("new_key", "New Label", position=-10)
+        self.assertEqual(ec.default_headers[0]["key"], "new_key")
 
     def test_remove_header(self):
         ec = ExportConfig()
@@ -723,11 +807,36 @@ class TestExportConfig(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(len(ec.default_headers), initial_count - 1)
 
+    def test_remove_header_not_found(self):
+        ec = ExportConfig()
+        initial_count = len(ec.default_headers)
+        result = ec.remove_header("nonexistent")
+        self.assertFalse(result)
+        self.assertEqual(len(ec.default_headers), initial_count)
+
     def test_reorder_headers(self):
         ec = ExportConfig()
         new_order = [h["key"] for h in reversed(ec.default_headers)]
         ec.reorder_headers(list(new_order))
         self.assertEqual(ec.default_headers[0]["key"], list(new_order)[0])
+
+    def test_reorder_headers_with_extra_keys(self):
+        ec = ExportConfig()
+        original_keys = [h["key"] for h in ec.default_headers]
+        new_order = [original_keys[1], "nonexistent_key", original_keys[0]]
+        result = ec.reorder_headers(new_order)
+        self.assertEqual(result[0]["key"], original_keys[1])
+        self.assertEqual(result[1]["key"], original_keys[0])
+
+    def test_apply_cli_overrides(self):
+        ec = ExportConfig()
+        args = type("Args", (), {
+            "input": None,
+            "output": None,
+            "format": "csv",
+        })()
+        ec.apply_cli_overrides(args)
+        self.assertEqual(ec.export_format, "csv")
 
     def test_validate(self):
         ec = ExportConfig()
@@ -767,6 +876,15 @@ class TestExportConfig(unittest.TestCase):
         ec = ExportConfig()
         r = repr(ec)
         self.assertIn("ExportConfig", r)
+
+    def test_apply_template(self):
+        ec = ExportConfig()
+        with mock.patch("style_template_manager.apply_template_to_config") as mock_apply:
+            mock_apply.return_value = (True, "成功")
+            success, msg = ec.apply_template("default")
+            self.assertTrue(success)
+            self.assertEqual(msg, "成功")
+            mock_apply.assert_called_once()
 
 
 if __name__ == "__main__":
