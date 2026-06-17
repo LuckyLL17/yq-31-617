@@ -1,0 +1,16 @@
+[run]
+source = 
+    multi_exporter
+    data_validator
+    config_manager
+    computed_columns
+
+omit =
+    tests/*
+    */__pycache__/*
+    *.pyc
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 2
