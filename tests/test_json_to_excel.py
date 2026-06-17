@@ -39,8 +39,15 @@ from json_to_excel import (
     export_to_excel,
     _create_border,
     _write_sheet_data,
+    _apply_validation_marks,
+    _print_validation_errors,
     DataLoader,
     ExcelExporter,
+    _match_range_group,
+    _match_custom_rule,
+    parse_args,
+    apply_cli_overrides,
+    run_with_config,
 )
 
 SAMPLE_DATA = [
@@ -920,7 +927,7 @@ class TestExportToExcel(unittest.TestCase):
                             "type": "cell_value",
                             "operator": "greater_than",
                             "value": 30,
-                            "style": {"font_color": "#FF0000"},
+                            "style": {"font_color": "#FF0000", "bg_color": "#FFFF00"},
                         }
                     ],
                 }
@@ -928,6 +935,20 @@ class TestExportToExcel(unittest.TestCase):
         }
         result = export_to_excel(SAMPLE_DATA, SAMPLE_HEADERS, config)
         self.assertTrue(os.path.exists(output_path))
+
+    def test_export_to_excel_with_freeze_header(self):
+        output_path = os.path.join(self.temp_dir, "freeze.xlsx")
+        config = {
+            "excel_output_path": output_path,
+            "auto_detect_headers": False,
+            "freeze_header": True,
+        }
+        result = export_to_excel(SAMPLE_DATA, SAMPLE_HEADERS, config)
+        self.assertTrue(os.path.exists(output_path))
+        from openpyxl import load_workbook
+        wb = load_workbook(output_path)
+        ws = wb.active
+        self.assertIsNotNone(ws.freeze_panes)
 
     def test_export_to_excel_split_without_all_sheet(self):
         output_path = os.path.join(self.temp_dir, "split_no_all.xlsx")
@@ -1202,6 +1223,523 @@ class TestExcelExporter(unittest.TestCase):
         })
         result = exporter.export(SAMPLE_DATA, SAMPLE_HEADERS)
         self.assertTrue(os.path.exists(output_path))
+
+
+class TestValidationMarks(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_apply_validation_marks(self):
+        from openpyxl import Workbook
+        from data_validator import ValidationResult, ValidationError, ValidationRule, ON_FAIL_MARK
+        
+        wb = Workbook()
+        ws = wb.active
+        data = [{"name": "张三", "age": 25}, {"name": "", "age": 30}]
+        headers = [
+            {"key": "name", "label": "姓名"},
+            {"key": "age", "label": "年龄"},
+        ]
+        # 先写表头
+        ws.append(["姓名", "年龄"])
+        # 再写数据
+        for item in data:
+            ws.append([item["name"], item["age"]])
+        
+        result = ValidationResult()
+        rule = ValidationRule("name", "required", {}, on_fail=ON_FAIL_MARK, message="姓名不能为空")
+        error = ValidationError(1, rule, "", "name")
+        result.add_error(error)
+        
+        original_indices = [0, 1]
+        _apply_validation_marks(ws, result, headers, original_indices)
+        
+        # 第2行数据（original index=1）在导出表中是第3行（+2是因为表头）
+        cell = ws.cell(row=3, column=1)
+        self.assertTrue(cell.font.bold)
+        self.assertIsNotNone(cell.comment)
+
+    def test_print_validation_errors(self):
+        from data_validator import ValidationResult, ValidationError, ValidationRule, ON_FAIL_MARK
+        
+        result = ValidationResult()
+        rule = ValidationRule("name", "required", {}, on_fail=ON_FAIL_MARK, message="姓名不能为空")
+        error = ValidationError(0, rule, "", "name")
+        result.add_error(error)
+        
+        data = [{"name": ""}]
+        with mock.patch("builtins.print") as mock_print:
+            _print_validation_errors(result, data, max_display=5)
+            self.assertTrue(mock_print.called)
+
+    def test_print_validation_errors_empty(self):
+        from data_validator import ValidationResult
+        
+        result = ValidationResult()
+        data = []
+        with mock.patch("builtins.print") as mock_print:
+            _print_validation_errors(result, data)
+            # 没有错误时不应该打印详情
+            call_count = mock_print.call_count
+            self.assertEqual(call_count, 0)
+
+    def test_print_validation_errors_truncated(self):
+        from data_validator import ValidationResult, ValidationError, ValidationRule, ON_FAIL_MARK
+        
+        result = ValidationResult()
+        for i in range(15):
+            rule = ValidationRule("name", "required", {}, on_fail=ON_FAIL_MARK, message=f"错误{i}")
+            error = ValidationError(i, rule, "", "name")
+            result.add_error(error)
+        
+        data = [{"name": ""} for _ in range(15)]
+        with mock.patch("builtins.print") as mock_print:
+            _print_validation_errors(result, data, max_display=10)
+            # 应该有截断提示
+            calls = [str(call) for call in mock_print.call_args_list]
+            self.assertTrue(any("还有" in str(call) for call in calls))
+
+
+class TestSplitAdvanced(unittest.TestCase):
+    def test_split_by_range(self):
+        data = [
+            {"score": 85, "name": "张三"},
+            {"score": 60, "name": "李四"},
+            {"score": 95, "name": "王五"},
+            {"score": 40, "name": "赵六"},
+        ]
+        config = {
+            "split_rule": "by_range",
+            "range_groups": [
+                {"name": "优秀", "min": 80, "max": 100},
+                {"name": "及格", "min": 60, "max": 79},
+            ],
+            "empty_value_label": "不及格",
+        }
+        result = split_data_by_field(data, "score", config)
+        self.assertGreaterEqual(len(result), 2)
+
+    def test_match_range_group_with_min_and_max(self):
+        rg = {"min": 60, "max": 100, "include_max": True}
+        self.assertTrue(_match_range_group(80, rg))
+        self.assertTrue(_match_range_group(60, rg))
+        self.assertFalse(_match_range_group(59, rg))
+        self.assertTrue(_match_range_group(100, rg))
+        self.assertFalse(_match_range_group(101, rg))
+
+    def test_match_range_group_with_min_only(self):
+        rg = {"min": 60}
+        self.assertTrue(_match_range_group(80, rg))
+        self.assertTrue(_match_range_group(60, rg))
+        self.assertFalse(_match_range_group(59, rg))
+
+    def test_match_range_group_with_max_only(self):
+        rg = {"max": 100, "include_max": True}
+        self.assertTrue(_match_range_group(80, rg))
+        self.assertTrue(_match_range_group(100, rg))
+        self.assertFalse(_match_range_group(101, rg))
+
+    def test_match_range_group_default_excludes_max(self):
+        rg = {"min": 60, "max": 100}
+        self.assertFalse(_match_range_group(100, rg))
+        self.assertTrue(_match_range_group(99.999, rg))
+
+    def test_match_range_group_none_value(self):
+        rg = {"min": 60, "max": 100}
+        self.assertFalse(_match_range_group(None, rg))
+
+    def test_split_by_custom(self):
+        data = [
+            {"status": "active", "name": "张三"},
+            {"status": "inactive", "name": "李四"},
+            {"status": "pending", "name": "王五"},
+        ]
+        config = {
+            "split_rule": "by_custom",
+            "custom_rules": [
+                {"name": "活跃", "values": ["active"]},
+                {"name": "非活跃", "values": ["inactive", "pending"]},
+            ],
+        }
+        result = split_data_by_field(data, "status", config)
+        self.assertGreaterEqual(len(result), 2)
+
+    def test_match_custom_rule_with_values(self):
+        cr = {"values": ["a", "b", "c"]}
+        self.assertTrue(_match_custom_rule("a", cr))
+        self.assertTrue(_match_custom_rule("b", cr))
+        self.assertFalse(_match_custom_rule("d", cr))
+
+    def test_match_custom_rule_with_condition(self):
+        cr = {"condition": "value.startswith('test')"}
+        self.assertTrue(_match_custom_rule("test123", cr))
+        self.assertFalse(_match_custom_rule("abc", cr))
+
+    def test_match_custom_rule_condition_exception(self):
+        cr = {"condition": "value / 0"}
+        self.assertFalse(_match_custom_rule(10, cr))
+
+    def test_match_custom_rule_with_min_max(self):
+        cr = {"min": 10, "max": 100, "include_max": True}
+        self.assertTrue(_match_custom_rule(50, cr))
+        self.assertTrue(_match_custom_rule(10, cr))
+        self.assertTrue(_match_custom_rule(100, cr))
+        self.assertFalse(_match_custom_rule(9, cr))
+        self.assertFalse(_match_custom_rule(101, cr))
+
+    def test_match_custom_rule_with_min_only(self):
+        cr = {"min": 10}
+        self.assertTrue(_match_custom_rule(50, cr))
+        self.assertFalse(_match_custom_rule(5, cr))
+
+    def test_match_custom_rule_with_max_exclusive(self):
+        cr = {"max": 100, "include_max": False}
+        self.assertTrue(_match_custom_rule(99, cr))
+        self.assertFalse(_match_custom_rule(100, cr))
+
+    def test_match_custom_rule_none_value_with_minmax(self):
+        cr = {"min": 10, "max": 100}
+        self.assertFalse(_match_custom_rule(None, cr))
+
+    def test_match_custom_rule_invalid_number(self):
+        cr = {"min": 10, "max": 100}
+        self.assertFalse(_match_custom_rule("abc", cr))
+
+    def test_match_custom_rule_single_value(self):
+        cr = {"values": "active"}
+        self.assertTrue(_match_custom_rule("active", cr))
+        self.assertFalse(_match_custom_rule("inactive", cr))
+
+    def test_match_custom_rule_none_value(self):
+        cr = {"values": ["a", "b"]}
+        self.assertFalse(_match_custom_rule(None, cr))
+
+    def test_split_by_custom_with_fallback(self):
+        data = [
+            {"status": "active", "name": "张三"},
+            {"status": "unknown", "name": "李四"},
+        ]
+        config = {
+            "split_rule": "by_custom",
+            "custom_rules": [
+                {"name": "活跃", "values": ["active"]},
+            ],
+            "fallback_group_name": "其他",
+        }
+        result = split_data_by_field(data, "status", config)
+        # 活跃 + 其他 = 2组
+        self.assertEqual(len(result), 2)
+
+
+class TestMorePivotFunctions(unittest.TestCase):
+    def setUp(self):
+        self.data = [
+            {"dept": "技术部", "gender": "男", "salary": 15000},
+            {"dept": "技术部", "gender": "女", "salary": 12000},
+            {"dept": "市场部", "gender": "男", "salary": 18000},
+            {"dept": "市场部", "gender": "女", "salary": 16000},
+        ]
+        self.headers = [
+            {"key": "dept", "label": "部门"},
+            {"key": "gender", "label": "性别"},
+            {"key": "salary", "label": "薪资"},
+        ]
+
+    def test_pivot_with_average(self):
+        pivot_config = {
+            "row_fields": ["dept"],
+            "column_fields": [],
+            "value_fields": [
+                {"field": "salary", "aggregate": "average", "label": "平均薪资"},
+            ],
+        }
+        result = build_pivot_table(self.data, pivot_config, self.headers)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["row_keys"]), 2)
+
+    def test_pivot_with_multiple_value_fields(self):
+        pivot_config = {
+            "row_fields": ["dept"],
+            "column_fields": [],
+            "value_fields": [
+                {"field": "salary", "aggregate": "sum", "label": "薪资总和"},
+                {"field": "salary", "aggregate": "average", "label": "平均薪资"},
+            ],
+        }
+        result = build_pivot_table(self.data, pivot_config, self.headers)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["value_fields"]), 2)
+
+    def test_pivot_row_total_with_average(self):
+        pivot_result = {
+            "row_keys": [("技术部",)],
+            "col_keys": [("男",), ("女",)],
+            "value_fields": [{"field": "salary", "aggregate": "average"}],
+            "data": {
+                ("技术部",): {
+                    ("男",): {"salary:average": [15000, 20000]},
+                    ("女",): {"salary:average": [12000]},
+                }
+            },
+        }
+        vf = {"field": "salary", "aggregate": "average"}
+        result = _compute_row_total(pivot_result, ("技术部",), vf)
+        self.assertAlmostEqual(result, 15666.67, places=0)
+
+    def test_pivot_row_total_with_max(self):
+        pivot_result = {
+            "row_keys": [("技术部",)],
+            "col_keys": [("男",), ("女",)],
+            "value_fields": [{"field": "salary", "aggregate": "max"}],
+            "data": {
+                ("技术部",): {
+                    ("男",): {"salary:max": [15000]},
+                    ("女",): {"salary:max": [12000]},
+                }
+            },
+        }
+        vf = {"field": "salary", "aggregate": "max"}
+        result = _compute_row_total(pivot_result, ("技术部",), vf)
+        self.assertEqual(result, 15000)
+
+    def test_pivot_row_total_with_min(self):
+        pivot_result = {
+            "row_keys": [("技术部",)],
+            "col_keys": [("男",), ("女",)],
+            "value_fields": [{"field": "salary", "aggregate": "min"}],
+            "data": {
+                ("技术部",): {
+                    ("男",): {"salary:min": [15000]},
+                    ("女",): {"salary:min": [12000]},
+                }
+            },
+        }
+        vf = {"field": "salary", "aggregate": "min"}
+        result = _compute_row_total(pivot_result, ("技术部",), vf)
+        self.assertEqual(result, 12000)
+
+
+class TestCLIFunctions(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_parse_args_basic(self):
+        test_args = ["json_to_excel.py", "-i", "input.json", "-o", "output.xlsx"]
+        with mock.patch("sys.argv", test_args):
+            args = parse_args()
+            self.assertEqual(args.input, "input.json")
+            self.assertEqual(args.output, "output.xlsx")
+
+    def test_parse_args_with_config(self):
+        test_args = ["json_to_excel.py", "-c", "config.yaml"]
+        with mock.patch("sys.argv", test_args):
+            args = parse_args()
+            self.assertEqual(args.config, "config.yaml")
+
+    def test_parse_args_defaults(self):
+        test_args = ["json_to_excel.py"]
+        with mock.patch("sys.argv", test_args):
+            args = parse_args()
+            self.assertIsNone(args.input)
+            self.assertIsNone(args.output)
+
+    def test_parse_args_with_format(self):
+        test_args = ["json_to_excel.py", "-f", "csv"]
+        with mock.patch("sys.argv", test_args):
+            args = parse_args()
+            self.assertEqual(args.format, "csv")
+
+    def test_apply_cli_overrides_output(self):
+        config = {"export_format": "excel"}
+        args = mock.Mock()
+        args.output = os.path.join(self.temp_dir, "test_output.xlsx")
+        args.format = None
+        args.input = None
+        
+        result = apply_cli_overrides(config, args)
+        self.assertIn("test_output.xlsx", result["excel_output_path"])
+
+    def test_apply_cli_overrides_format(self):
+        config = {}
+        args = mock.Mock()
+        args.output = None
+        args.format = "csv"
+        args.input = None
+        
+        result = apply_cli_overrides(config, args)
+        self.assertEqual(result["export_format"], "csv")
+
+    def test_apply_cli_overrides_input(self):
+        config = {}
+        args = mock.Mock()
+        args.input = "data.json"
+        args.output = None
+        args.format = None
+        
+        result = apply_cli_overrides(config, args)
+        self.assertEqual(result["json_file_path"], "data.json")
+
+
+class TestMoreExporterMethods(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_print_export_summary_single_sheet(self):
+        exporter = ExcelExporter({})
+        output_path = os.path.join(self.temp_dir, "test.xlsx")
+        with mock.patch("builtins.print") as mock_print:
+            exporter._print_export_summary(output_path, SAMPLE_DATA, SAMPLE_HEADERS)
+            self.assertTrue(mock_print.called)
+
+    def test_print_export_summary_multiple_sheets(self):
+        exporter = ExcelExporter({})
+        output_path = os.path.join(self.temp_dir, "test.xlsx")
+        with mock.patch("builtins.print") as mock_print:
+            exporter._print_export_summary(output_path, SAMPLE_DATA, SAMPLE_HEADERS, sheet_count=3)
+            calls = [str(call) for call in mock_print.call_args_list]
+            self.assertTrue(any("3 个工作表" in str(call) for call in calls))
+
+    def test_print_export_summary_with_validation(self):
+        from data_validator import ValidationResult, ValidationError, ValidationRule, ON_FAIL_MARK, ON_FAIL_SKIP
+        exporter = ExcelExporter({})
+        output_path = os.path.join(self.temp_dir, "test.xlsx")
+        result = ValidationResult()
+        rule1 = ValidationRule("name", "required", {}, on_fail=ON_FAIL_MARK)
+        error1 = ValidationError(0, rule1, "", "name")
+        result.add_error(error1)
+        rule2 = ValidationRule("age", "min", {"value": 0}, on_fail=ON_FAIL_SKIP)
+        error2 = ValidationError(1, rule2, -1, "age")
+        result.add_error(error2)
+        
+        with mock.patch("builtins.print") as mock_print:
+            exporter._print_export_summary(output_path, SAMPLE_DATA, SAMPLE_HEADERS, validation_result=result, sheet_count=1)
+            calls = [str(call) for call in mock_print.call_args_list]
+            joined = " ".join(calls)
+            self.assertIn("跳过", joined)
+            self.assertIn("标记", joined)
+
+    def test_excel_exporter_repr(self):
+        exporter = ExcelExporter({})
+        repr_str = repr(exporter)
+        self.assertIn("ExcelExporter", repr_str)
+
+    def test_data_loader_repr(self):
+        loader = DataLoader()
+        repr_str = repr(loader)
+        self.assertIn("DataLoader", repr_str)
+
+
+class TestMoreUtilityFunctions(unittest.TestCase):
+    def test_get_column_letter_high_number(self):
+        self.assertEqual(_get_column_letter(27), "AA")
+        self.assertEqual(_get_column_letter(26*26+26+1), "AAA")
+
+    def test_sanitize_sheet_name_empty(self):
+        result = _sanitize_sheet_name("")
+        self.assertGreater(len(result), 0)
+
+    def test_sanitize_sheet_name_only_invalid_chars(self):
+        result = _sanitize_sheet_name("[]\\/?*")
+        self.assertGreater(len(result), 0)
+
+    def test_render_sheet_name_with_index_only(self):
+        result = _render_sheet_name("Sheet{index}", "", 5, 10)
+        self.assertEqual(result, "Sheet5")
+
+    def test_render_sheet_name_long_value_then_sanitize(self):
+        long_value = "A" * 50
+        rendered = _render_sheet_name("{value}", long_value, 1, 3)
+        # _sanitize_sheet_name 会截断到 31 字符
+        result = _sanitize_sheet_name(rendered)
+        self.assertLessEqual(len(result), 31)
+
+    def test_format_value_with_count(self):
+        self.assertEqual(_format_value(5, "count"), 5)
+
+    def test_format_value_with_product(self):
+        self.assertEqual(_format_value(100, "product"), 100)
+
+    def test_format_value_with_stddev(self):
+        self.assertEqual(_format_value(2.5, "stddev"), 2.5)
+
+    def test_format_value_with_var(self):
+        self.assertEqual(_format_value(10.0, "var"), 10.0)
+
+
+class TestDataLoaderMoreMethods(unittest.TestCase):
+    def setUp(self):
+        self.loader = DataLoader()
+        self.loader.set_data(SAMPLE_DATA)
+
+    def test_extract_value_method(self):
+        item = {"user": {"name": "张三"}}
+        result = self.loader.extract_value(item, "user.name")
+        self.assertEqual(result, "张三")
+
+    def test_flatten_dict_method(self):
+        d = {"a": {"b": {"c": 1}}}
+        result = self.loader.flatten_dict(d)
+        self.assertEqual(result, {"a.b.c": 1})
+
+    def test_flatten_dict_with_list(self):
+        d = {"tags": [1, 2, 3]}
+        result = self.loader.flatten_dict(d)
+        # 列表值会被序列化为JSON
+        self.assertIn("tags", result)
+        self.assertIsInstance(result["tags"], str)
+
+
+class TestExcelExporterMoreMethods(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.exporter = ExcelExporter({})
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_get_unique_sheet_name_basic(self):
+        used = ["Sheet1", "Sheet2"]
+        result = self.exporter._get_unique_sheet_name("Sheet1", used)
+        self.assertNotEqual(result, "Sheet1")
+        self.assertIn("Sheet1", result)
+
+    def test_get_unique_sheet_name_not_used(self):
+        used = ["Sheet1"]
+        result = self.exporter._get_unique_sheet_name("Sheet2", used)
+        self.assertEqual(result, "Sheet2")
+
+    def test_get_unique_sheet_name_truncated(self):
+        long_name = "A" * 40
+        result = self.exporter._get_unique_sheet_name(long_name, [])
+        self.assertLessEqual(len(result), 31)
+
+    def test_get_unique_sheet_name_multiple_duplicates(self):
+        used = ["Data", "Data_2", "Data_3"]
+        result = self.exporter._get_unique_sheet_name("Data", used)
+        self.assertNotIn(result, used)
+
+    def test_apply_styles(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        data = SAMPLE_DATA
+        headers = SAMPLE_HEADERS
+        for h in headers:
+            ws.append([h["key"]])
+        for item in data:
+            ws.append([item.get(h["key"], "") for h in headers])
+        
+        self.exporter._apply_styles(ws, headers, data)
+        # 样式应该被应用了，不抛出异常就成功
 
 
 if __name__ == "__main__":
