@@ -379,6 +379,55 @@ class Test最终覆盖:
         assert result == output
 
 
+class Test覆盖Line309和2458:
+    def test_apply_conditional_formatting_col_idx_none(self):
+        class ShiftingHeaders:
+            def __init__(self, first_iter, second_iter):
+                self._first = first_iter
+                self._second = second_iter
+                self._call = 0
+
+            def __iter__(self):
+                self._call += 1
+                if self._call == 1:
+                    return iter(self._first)
+                return iter(self._second)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Name", "Age"])
+
+        header_name = {"key": "name", "label": "Name"}
+        header_age = {"key": "age", "label": "Age"}
+
+        shifting = ShiftingHeaders([header_name], [header_name, header_age])
+
+        data = [{"name": "Alice", "age": 30}]
+        config = {
+            "conditional_format_rules": [
+                {
+                    "field": "age",
+                    "type": "numeric",
+                    "operator": ">",
+                    "value": 25,
+                    "style": {"font_color": "#FF0000"},
+                }
+            ],
+            "data_style": {},
+        }
+
+        with patch("json_to_excel.extract_value", side_effect=lambda item, key: item.get(key)):
+            apply_conditional_formatting(ws, shifting, data, config)
+
+    def test_main_guard_with_runpy(self):
+        import runpy
+        import json_to_excel as j2e
+
+        with patch("sys.argv", ["json_to_excel.py", "--list-formats"]):
+            with patch("builtins.print"):
+                runpy.run_path(j2e.__file__, run_name="__main__")
+
+
 class Test覆盖最后4行:
     def test_split名称冲突长名称截断后缀(self, tmp_path):
         data = [

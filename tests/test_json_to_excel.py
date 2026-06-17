@@ -91,6 +91,7 @@ class TestProgressTracker更新:
 
     def test_update不超过total(self):
         tracker = ProgressTracker(total=5, min_interval=0)
+        tracker.start_time = time.time() - 0.01
         tracker.update(n=10)
         assert tracker.current == 5
 
