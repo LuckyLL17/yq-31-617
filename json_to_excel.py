@@ -60,7 +60,7 @@ class ProgressTracker:
 
     def _render(self):
         elapsed = time.time() - self.start_time
-        if self.current > 0:
+        if self.current > 0 and elapsed > 0:
             rate = self.current / elapsed
             remaining = (self.total - self.current) / rate if rate > 0 else 0
         else:
@@ -1764,7 +1764,10 @@ def create_pivot_sheet(wb, pivot_result, pivot_config, headers):
         if num_value_fields > 1:
             header_row_count += 1
     else:
-        header_row_count = 1 if num_value_fields > 1 else 0
+        if num_value_fields > 1 or num_row_fields > 0:
+            header_row_count = 1
+        else:
+            header_row_count = 0
 
     data_start_row = header_row_count + 1
 
