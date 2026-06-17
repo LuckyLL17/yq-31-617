@@ -320,6 +320,14 @@ class TestExportToCSV(unittest.TestCase):
         self.assertTrue(os.path.exists(result))
         self.assertTrue(os.path.exists(os.path.dirname(output_path)))
 
+    def test_csv_with_external_progress(self):
+        mock_progress = mock.MagicMock()
+        output_path = os.path.join(self.temp_dir, "ext_progress.csv")
+        config = {"csv_output_path": output_path}
+        result = export_to_csv(SAMPLE_DATA, SAMPLE_HEADERS, config, progress=mock_progress, progress_step=1)
+        self.assertTrue(os.path.exists(result))
+        self.assertEqual(mock_progress.update.call_count, 3)
+
 
 class TestExportToTSV(unittest.TestCase):
     def setUp(self):
@@ -390,6 +398,14 @@ class TestExportToTSV(unittest.TestCase):
         result = export_to_tsv(SAMPLE_DATA, SAMPLE_HEADERS, config)
         self.assertTrue(os.path.exists(result))
         self.assertTrue(os.path.exists(os.path.dirname(output_path)))
+
+    def test_tsv_with_external_progress(self):
+        mock_progress = mock.MagicMock()
+        output_path = os.path.join(self.temp_dir, "ext_progress.tsv")
+        config = {"tsv_output_path": output_path}
+        result = export_to_tsv(SAMPLE_DATA, SAMPLE_HEADERS, config, progress=mock_progress, progress_step=1)
+        self.assertTrue(os.path.exists(result))
+        self.assertEqual(mock_progress.update.call_count, 3)
 
 
 class TestExportToJSON(unittest.TestCase):
@@ -692,6 +708,14 @@ class TestExportToMarkdown(unittest.TestCase):
             content = f.read()
         self.assertIn("| calc |", content)
 
+    def test_markdown_with_external_progress(self):
+        mock_progress = mock.MagicMock()
+        output_path = os.path.join(self.temp_dir, "ext_progress.md")
+        config = {"markdown_output_path": output_path}
+        result = export_to_markdown(SAMPLE_DATA, SAMPLE_HEADERS, config, progress=mock_progress, progress_step=1)
+        self.assertTrue(os.path.exists(result))
+        self.assertEqual(mock_progress.update.call_count, 3)
+
 
 class TestExportToHTML(unittest.TestCase):
     def setUp(self):
@@ -871,6 +895,14 @@ class TestExportToHTML(unittest.TestCase):
             content = f.read()
         self.assertIn("<td>calc</td>", content)
 
+    def test_html_with_external_progress(self):
+        mock_progress = mock.MagicMock()
+        output_path = os.path.join(self.temp_dir, "ext_progress.html")
+        config = {"html_output_path": output_path}
+        result = export_to_html(SAMPLE_DATA, SAMPLE_HEADERS, config, progress=mock_progress, progress_step=1)
+        self.assertTrue(os.path.exists(result))
+        self.assertEqual(mock_progress.update.call_count, 3)
+
 
 class TestExportToPDF(unittest.TestCase):
     def setUp(self):
@@ -975,6 +1007,15 @@ class TestExportToPDF(unittest.TestCase):
         result = export_to_pdf(data, headers, config)
         self.assertIsNotNone(result)
         self.assertTrue(os.path.exists(result))
+
+    def test_export_pdf_with_external_progress(self):
+        mock_progress = mock.MagicMock()
+        output_path = os.path.join(self.temp_dir, "ext_progress.pdf")
+        config = {"pdf_output_path": output_path}
+        result = export_to_pdf(SAMPLE_DATA, SAMPLE_HEADERS, config, progress=mock_progress, progress_step=1)
+        self.assertIsNotNone(result)
+        self.assertTrue(os.path.exists(result))
+        self.assertEqual(mock_progress.update.call_count, 3)
 
 
 class TestExportPdfViaHtml(unittest.TestCase):

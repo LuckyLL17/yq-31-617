@@ -4,6 +4,7 @@ source =
     data_validator
     config_manager
     computed_columns
+    json_to_excel
 
 omit =
     tests/*

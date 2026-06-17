@@ -83,7 +83,7 @@ def _prepare_rows(data, headers, computed_cache=None, progress=None, progress_st
     return rows
 
 
-def export_to_csv(data, headers, config, computed_cache=None):
+def export_to_csv(data, headers, config, computed_cache=None, progress=None, progress_step=1):
     output_path = config.get("csv_output_path") or config.get("output_path", "./output/result.csv")
     csv_config = config.get("csv_config", {})
     encoding = csv_config.get("encoding", "utf-8-sig")
@@ -103,9 +103,12 @@ def export_to_csv(data, headers, config, computed_cache=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    progress = ProgressTracker(total=len(data), description="📝 导出CSV", unit="行")
-    rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
-    progress.finish()
+    if progress is None:
+        progress = ProgressTracker(total=len(data), description="📝 导出CSV", unit="行")
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
+        progress.finish()
+    else:
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress, progress_step=progress_step)
 
     with open(output_path, "w", encoding=encoding, newline="") as f:
         writer = csv.writer(
@@ -123,7 +126,7 @@ def export_to_csv(data, headers, config, computed_cache=None):
     return output_path
 
 
-def export_to_tsv(data, headers, config, computed_cache=None):
+def export_to_tsv(data, headers, config, computed_cache=None, progress=None, progress_step=1):
     output_path = config.get("tsv_output_path") or config.get("output_path", "./output/result.tsv")
     tsv_config = config.get("tsv_config", {})
     encoding = tsv_config.get("encoding", "utf-8-sig")
@@ -133,9 +136,12 @@ def export_to_tsv(data, headers, config, computed_cache=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    progress = ProgressTracker(total=len(data), description="📝 导出TSV", unit="行")
-    rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
-    progress.finish()
+    if progress is None:
+        progress = ProgressTracker(total=len(data), description="📝 导出TSV", unit="行")
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
+        progress.finish()
+    else:
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress, progress_step=progress_step)
 
     with open(output_path, "w", encoding=encoding, newline="") as f:
         writer = csv.writer(f, delimiter="\t", quotechar='"', quoting=csv.QUOTE_MINIMAL)
@@ -148,7 +154,7 @@ def export_to_tsv(data, headers, config, computed_cache=None):
     return output_path
 
 
-def export_to_json(data, headers, config, computed_cache=None):
+def export_to_json(data, headers, config, computed_cache=None, progress=None, progress_step=1):
     output_path = config.get("json_output_path") or config.get("output_path", "./output/result.json")
     json_config = config.get("json_config", {})
     indent = json_config.get("indent", 2)
@@ -159,11 +165,15 @@ def export_to_json(data, headers, config, computed_cache=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    progress = ProgressTracker(total=len(data), description="📝 导出JSON", unit="行")
+    internal_progress = False
+    if progress is None:
+        progress = ProgressTracker(total=len(data), description="📝 导出JSON", unit="行")
+        internal_progress = True
+
     export_data_list = []
     for item in data:
         if not isinstance(item, dict):
-            progress.update()
+            progress.update(progress_step)
             continue
         if include_labels:
             row_obj = {}
@@ -191,8 +201,9 @@ def export_to_json(data, headers, config, computed_cache=None):
                     progress.set_field(h["key"])
                     progress.set_row_preview(preview_val)
             export_data_list.append(row_obj)
-        progress.update()
-    progress.finish()
+        progress.update(progress_step)
+    if internal_progress:
+        progress.finish()
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(export_data_list, f, ensure_ascii=ensure_ascii, indent=indent if indent > 0 else None)
@@ -202,7 +213,7 @@ def export_to_json(data, headers, config, computed_cache=None):
     return output_path
 
 
-def export_to_markdown(data, headers, config, computed_cache=None):
+def export_to_markdown(data, headers, config, computed_cache=None, progress=None, progress_step=1):
     output_path = config.get("markdown_output_path") or config.get("output_path", "./output/result.md")
     md_config = config.get("markdown_config", {})
     title = md_config.get("title", "数据导出")
@@ -213,9 +224,12 @@ def export_to_markdown(data, headers, config, computed_cache=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    progress = ProgressTracker(total=len(data), description="📝 导出Markdown", unit="行")
-    rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
-    progress.finish()
+    if progress is None:
+        progress = ProgressTracker(total=len(data), description="📝 导出Markdown", unit="行")
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
+        progress.finish()
+    else:
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress, progress_step=progress_step)
 
     def _truncate(s, width):
         s = str(s)
@@ -257,7 +271,7 @@ def export_to_markdown(data, headers, config, computed_cache=None):
     return output_path
 
 
-def export_to_html(data, headers, config, computed_cache=None):
+def export_to_html(data, headers, config, computed_cache=None, progress=None, progress_step=1):
     output_path = config.get("html_output_path") or config.get("output_path", "./output/result.html")
     html_config = config.get("html_config", {})
     title = html_config.get("title", "数据导出")
@@ -270,9 +284,12 @@ def export_to_html(data, headers, config, computed_cache=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    progress = ProgressTracker(total=len(data), description="📝 导出HTML", unit="行")
-    rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
-    progress.finish()
+    if progress is None:
+        progress = ProgressTracker(total=len(data), description="📝 导出HTML", unit="行")
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
+        progress.finish()
+    else:
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress, progress_step=progress_step)
 
     default_css = """
     <style>
@@ -363,7 +380,7 @@ def export_to_html(data, headers, config, computed_cache=None):
     return output_path
 
 
-def export_to_pdf(data, headers, config, computed_cache=None):
+def export_to_pdf(data, headers, config, computed_cache=None, progress=None, progress_step=1):
     output_path = config.get("pdf_output_path") or config.get("output_path", "./output/result.pdf")
     pdf_config = config.get("pdf_config", {})
     title = pdf_config.get("title", "数据导出")
@@ -376,9 +393,12 @@ def export_to_pdf(data, headers, config, computed_cache=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    progress = ProgressTracker(total=len(data), description="📝 导出PDF", unit="行")
-    rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
-    progress.finish()
+    if progress is None:
+        progress = ProgressTracker(total=len(data), description="📝 导出PDF", unit="行")
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress)
+        progress.finish()
+    else:
+        rows = _prepare_rows(data, headers, computed_cache=computed_cache, progress=progress, progress_step=progress_step)
 
     try:
         from reportlab.lib import colors
