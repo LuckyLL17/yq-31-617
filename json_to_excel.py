@@ -60,6 +60,8 @@ class ProgressTracker:
 
     def _render(self):
         elapsed = time.time() - self.start_time
+        if elapsed <= 0:
+            elapsed = 0.001
         if self.current > 0:
             rate = self.current / elapsed
             remaining = (self.total - self.current) / rate if rate > 0 else 0
