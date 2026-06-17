@@ -151,7 +151,7 @@ class ValidationError:
 
     def __repr__(self):
         val_str = str(self.value)[:30] if self.value is not None else "(空)"
-        return f"第 {self.row_index + 1} 行, {self.rule}"
+        return f"第 {self.row_index + 1} 行, 值: {val_str}, {self.rule}"
 
 
 class ValidationResult:

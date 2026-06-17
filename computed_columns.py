@@ -46,8 +46,10 @@ SAFE_FUNCTIONS = {
 def _parse_date(value):
     if value is None or value == "":
         return None
-    if isinstance(value, (datetime, date)):
-        return value if isinstance(value, date) else value.date()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
     if isinstance(value, (int, float)):
         try:
             return date.fromordinal(int(value) + 693594)
@@ -327,7 +329,7 @@ def evaluate_computed_column(col_config, item, extract_value_func, now=None):
 def apply_computed_columns(data, headers, config, extract_value_func):
     computed_columns = config.get("computed_columns", [])
     if not computed_columns:
-        return data, headers
+        return {}, list(headers)
 
     now = date.today()
     new_headers = list(headers)
